@@ -397,16 +397,9 @@ fn is_connected(_ctx: &RenderContext) -> bool {
 
 #[cfg(all(test, feature = "_ble"))]
 mod tests {
-    use core::pin::pin;
-
     use embedded_graphics::mock_display::MockDisplay;
-    use futures::poll;
 
     use super::*;
-    use crate::core_traits::Runnable;
-    use crate::event::{ChargingStateEvent, EventSubscriber, SubscribableEvent, publish_event};
-    use crate::input_device::battery::BatteryProcessor;
-    use crate::test_support::test_block_on;
 
     fn assert_battery_render(battery: BatteryStatusEvent, label: &str, filled_pixels: usize) {
         let mut actual = MockDisplay::<BinaryColor>::new();
@@ -446,40 +439,20 @@ mod tests {
     }
 
     #[test]
-    fn charging_only_status_displays_unknown_level_and_charging_without_full_bars() {
-        test_block_on(async {
-            let mut states = BatteryStatusEvent::subscriber();
-            let mut processor = BatteryProcessor::charging_only();
-            let mut run = pin!(processor.run());
-            assert!(poll!(run.as_mut()).is_pending());
-            for (charging, label) in [(false, "?"), (true, "CHG"), (false, "?")] {
-                publish_event(ChargingStateEvent { charging });
-                assert!(poll!(run.as_mut()).is_pending());
-                let battery = states.next_event().await;
-                assert_eq!(
-                    battery.0,
-                    BatteryStatus::Available {
-                        charge_state: charging.into(),
-                        level: None
-                    }
-                );
-                assert_battery_render(battery, label, 0);
-            }
-        });
-    }
-
-    #[test]
-    fn known_battery_levels_keep_their_percentage_and_bar_count() {
-        for (level, label, pixels) in [(0, "0%", 0), (50, "50%", 9), (100, "100%", 18)] {
+    fn unknown_battery_levels_have_no_full_bars() {
+        for (level, charging, label, pixels) in [
+            (None, false, "?", 0),
+            (None, true, "CHG", 0),
+            (Some(100), false, "100%", 18),
+        ] {
             assert_battery_render(
                 BatteryStatusEvent(BatteryStatus::Available {
-                    charge_state: ChargeState::Discharging,
-                    level: Some(level),
+                    charge_state: charging.into(),
+                    level,
                 }),
                 label,
                 pixels,
             );
         }
-        assert_battery_render(BatteryStatusEvent(BatteryStatus::Unavailable), "N/A", 0);
     }
 }

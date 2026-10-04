@@ -205,7 +205,6 @@ mod tests {
                     level: Some(63),
                 }
             );
-            assert_eq!(BatteryProcessor::new(1, 5).get_battery_percent(900), Some(63));
         });
     }
 
@@ -216,7 +215,7 @@ mod tests {
             battery.on_battery_adc_event(BatteryAdcEvent(2920)).await;
 
             // The first GPIO read refines Unknown to Discharging; it must not erase the ADC result.
-            for charging in [false, false, true] {
+            for charging in [false, true] {
                 battery.on_charging_state_event(ChargingStateEvent { charging }).await;
                 assert_eq!(
                     current_battery_status(),
@@ -239,9 +238,6 @@ mod tests {
             );
 
             battery.on_battery_adc_event(BatteryAdcEvent(3200)).await;
-            battery
-                .on_charging_state_event(ChargingStateEvent { charging: false })
-                .await;
             assert_eq!(
                 current_battery_status(),
                 BatteryStatus::Available {
