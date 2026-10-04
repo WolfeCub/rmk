@@ -13,11 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING**: Configure charging GPIOs through `ChargingStateReader` and `BatteryLedProcessor` instead of `BleBatteryConfig`. See [battery setup migration](https://rmk.rs/docs/migration/v09_v10#battery-setup).
+
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
 - **BREAKING**: Keyboard macros are reworked around `MacroOp` lists.
 - **BREAKING**: Bump Rynk protocol version to 0.2: now `GetMacro`/`SetMacro` read and write a whole macro by index, and `BleStatus` gained a `bonded` field, changing its wire format and that of `ConnectionStatus`.
 
 ### Added
+
+- Assemble board battery inputs and charging indicators through one shared path; support `BatteryProcessor::charging_only()` and per-board split charger pins.
 
 - Add timer-only processors and combine polling with resettable deadlines through `#[processor]`. Both TOML and Rust projects implement `DeadlineProcessor::deadline()` and `on_deadline()` directly.
 - Macro operations accept any single action (`WM`, `MO`, `OSM`, ...) without the `vial` feature, and a new `pause_for_release` operation (`MacroOp::PauseForRelease`) runs the rest of the macro when the macro key is released

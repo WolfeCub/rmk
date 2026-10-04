@@ -8,6 +8,8 @@ rmk = { version = "0.9", features = [
 ] }
 ```
 
+For battery measurement, charging LEDs, and BLE pairing options, see [wireless and Bluetooth configuration](../configuration/wireless).
+
 RMK also provides BLE examples; check out [nrf52840_ble](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/nrf52840_ble), [nrf52832_ble](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/nrf52832_ble), [pi_pico_w_ble](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/pi_pico_w_ble), and [esp32c3_ble](https://github.com/rmk-rs/rmk/tree/main/examples/use_config/esp32c3_ble) for more details.
 
 Since multiple targets are not currently supported by `docs.rs`, API documentation is not available on `docs.rs`. Check the examples for usage.

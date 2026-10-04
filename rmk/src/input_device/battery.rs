@@ -26,20 +26,14 @@ pub(crate) fn current_battery_status() -> BatteryStatus {
     BATTERY_STATUS.lock(|c| c.get())
 }
 
-/// Reads charging state from a GPIO pin and publishes ChargingStateEvent.
-///
-/// This input device monitors a charging state pin and publishes events when
-/// the charging state changes.
+/// Publishes the initial GPIO charging state and subsequent changes.
 #[input_device(publish = ChargingStateEvent)]
 pub struct ChargingStateReader<I: InputPin> {
     // Charging state pin or standby pin
     state_input: I,
     // True: low represents charging, False: high represents charging
     low_active: bool,
-    // True: charging, False: not charging
-    current_charging_state: bool,
-    // First read done
-    first_read: bool,
+    current_charging_state: Option<bool>,
 }
 
 impl<I: InputPin> ChargingStateReader<I> {
@@ -47,44 +41,24 @@ impl<I: InputPin> ChargingStateReader<I> {
         Self {
             state_input,
             low_active,
-            current_charging_state: false,
-            first_read: false,
+            current_charging_state: None,
         }
     }
 
-    /// Read the charging state and return an event.
-    /// This method waits until there's a state change to report.
+    /// Waits for the first reading or a change in charging state.
     async fn read_charging_state_event(&mut self) -> ChargingStateEvent {
-        // For the first read, don't check whether the charging state is changed
-        if !self.first_read {
-            // Wait 2s before reading the first value
-            embassy_time::Timer::after_secs(2).await;
-            let charging_state = if self.low_active {
-                self.state_input.is_low().unwrap_or(false)
-            } else {
-                self.state_input.is_high().unwrap_or(false)
-            };
-            self.current_charging_state = charging_state;
-            self.first_read = true;
-            return ChargingStateEvent {
-                charging: charging_state,
-            };
-        }
-
         loop {
-            // Check charging state every 5 seconds
-            embassy_time::Timer::after_secs(5).await;
+            let delay = if self.current_charging_state.is_none() { 2 } else { 5 };
+            embassy_time::Timer::after_secs(delay).await;
 
-            // Detect charging state
             let charging_state = if self.low_active {
                 self.state_input.is_low().unwrap_or(false)
             } else {
                 self.state_input.is_high().unwrap_or(false)
             };
 
-            // Only return event when charging state changes
-            if charging_state != self.current_charging_state {
-                self.current_charging_state = charging_state;
+            if self.current_charging_state != Some(charging_state) {
+                self.current_charging_state = Some(charging_state);
                 return ChargingStateEvent {
                     charging: charging_state,
                 };
@@ -97,8 +71,7 @@ impl<I: InputPin> ChargingStateReader<I> {
 /// emits `BatteryStatusEvent` when battery status changes.
 #[processor(subscribe = [BatteryAdcEvent, ChargingStateEvent])]
 pub struct BatteryProcessor {
-    adc_divider_measured: u32,
-    adc_divider_total: u32,
+    adc_divider: Option<(u32, u32)>,
     /// Current battery status
     battery_status: BatteryStatus,
 }
@@ -106,8 +79,16 @@ pub struct BatteryProcessor {
 impl BatteryProcessor {
     pub fn new(adc_divider_measured: u32, adc_divider_total: u32) -> Self {
         BatteryProcessor {
-            adc_divider_measured,
-            adc_divider_total,
+            adc_divider: Some((adc_divider_measured, adc_divider_total)),
+            battery_status: BatteryStatus::Unavailable,
+        }
+    }
+
+    /// Reports charger state without measuring a battery percentage.
+    /// Run a `ChargingStateReader` alongside this processor.
+    pub fn charging_only() -> Self {
+        Self {
+            adc_divider: None,
             battery_status: BatteryStatus::Unavailable,
         }
     }
@@ -123,7 +104,8 @@ impl BatteryProcessor {
     }
 
     #[cfg(feature = "_ble")]
-    fn get_battery_percent(&self, val: u16) -> u8 {
+    fn get_battery_percent(&self, val: u16) -> Option<u8> {
+        let (divider_measured, divider_total) = self.adc_divider?;
         // Avoid overflow
         let val = val as i64;
 
@@ -137,8 +119,8 @@ impl BatteryProcessor {
         // v_adc = v_bat * measured / total => val = v_bat * 1137.8 * measured / total
         //
         // If the battery voltage range is 3.6v ~ 4.2v, the adc val range should be (4096 ~ 4755) * measured / total
-        let mut measured = self.adc_divider_measured as i64;
-        let mut total = self.adc_divider_total as i64;
+        let mut measured = divider_measured as i64;
+        let mut total = divider_total as i64;
         if 500 < val && val < 1000 {
             // Thing becomes different when using vddh as reference
             // The adc value for vddh pin is actually vddh/5,
@@ -148,9 +130,9 @@ impl BatteryProcessor {
         }
         if measured == 0 || total == 0 {
             error!("Battery ADC divider values must be greater than zero");
-            return 0;
+            return Some(0);
         }
-        if val > 4755 * measured / total {
+        Some(if val > 4755 * measured / total {
             // 4755 ~= 4.2v * 1137.8
             100_u8
         } else if val < 4055 * measured / total {
@@ -159,23 +141,90 @@ impl BatteryProcessor {
             0_u8
         } else {
             ((val * total / measured - 4055) / 7) as u8
-        }
+        })
     }
 }
 
 #[cfg(all(test, feature = "_ble"))]
 mod tests {
-    use super::BatteryProcessor;
+    use core::pin::pin;
+
+    use embassy_futures::join::join3;
+    use embassy_time::{Duration, MockDriver};
+    use embedded_hal_mock::eh1::digital::{Mock, State, Transaction};
+    use futures::poll;
+    use rmk_types::battery::{BatteryStatus, ChargeState};
+
+    use super::{BatteryProcessor, ChargingStateReader, current_battery_status};
+    use crate::core_traits::Runnable;
+    use crate::event::{BatteryAdcEvent, publish_event};
+    use crate::processor::builtin::battery_led::BatteryLedProcessor;
+    use crate::test_support::test_block_on;
 
     #[test]
     fn invalid_adc_dividers_do_not_panic() {
-        assert_eq!(BatteryProcessor::new(1, 0).get_battery_percent(2000), 0);
-        assert_eq!(BatteryProcessor::new(0, 1).get_battery_percent(2000), 0);
+        assert_eq!(BatteryProcessor::new(1, 0).get_battery_percent(2000), Some(0));
+        assert_eq!(BatteryProcessor::new(0, 1).get_battery_percent(2000), Some(0));
     }
 
     #[test]
     fn divider_rounding_boundary_does_not_underflow() {
-        assert_eq!(BatteryProcessor::new(2000, 2806).get_battery_percent(2890), 0);
+        assert_eq!(BatteryProcessor::new(2000, 2806).get_battery_percent(2890), Some(0));
+    }
+
+    #[test]
+    fn initial_discharging_state_is_reported() {
+        let mut input = Mock::new(&[Transaction::get(State::High)]);
+        let mut charging = ChargingStateReader::new(input.clone(), true);
+        let event = test_block_on(charging.read_charging_state_event());
+        assert!(!event.charging);
+        input.done();
+    }
+
+    #[test]
+    fn charging_only_pipeline_drives_led_without_inventing_a_battery_level() {
+        test_block_on(async {
+            let mut input = Mock::new(&[Transaction::get(State::Low), Transaction::get(State::High)]);
+            let mut output = Mock::new(&[
+                Transaction::set(State::Low),
+                // The LED's ready tick runs before its state event; it updates on the next tick.
+                Transaction::set(State::Low),
+                Transaction::set(State::High),
+                Transaction::set(State::High),
+                Transaction::set(State::High),
+                Transaction::set(State::High),
+                Transaction::set(State::High),
+                Transaction::set(State::Low),
+            ]);
+            let mut charging = ChargingStateReader::new(input.clone(), true);
+            let mut battery = BatteryProcessor::charging_only();
+            let mut led = BatteryLedProcessor::new(output.clone(), false);
+            let mut run = pin!(join3(charging.run(), battery.run(), led.run()));
+            assert!(poll!(run.as_mut()).is_pending());
+
+            for second in 1..=8 {
+                MockDriver::get().advance(Duration::from_secs(1));
+                if second == 8 {
+                    publish_event(BatteryAdcEvent(4096));
+                }
+                assert!(poll!(run.as_mut()).is_pending());
+                if second >= 2 {
+                    assert_eq!(
+                        current_battery_status(),
+                        BatteryStatus::Available {
+                            charge_state: if second < 7 {
+                                ChargeState::Charging
+                            } else {
+                                ChargeState::Discharging
+                            },
+                            level: None,
+                        }
+                    );
+                }
+            }
+            input.done();
+            output.done();
+        });
     }
 }
 
@@ -185,6 +234,10 @@ impl BatteryProcessor {
         trace!("Detected battery ADC value: {:?}", val);
 
         #[cfg(feature = "_ble")]
+        let Some(battery_percent) = self.get_battery_percent(val) else {
+            return;
+        };
+        #[cfg(feature = "_ble")]
         match self.battery_status {
             // Skip ADC updates while charging
             BatteryStatus::Available {
@@ -193,7 +246,6 @@ impl BatteryProcessor {
             } => {}
             // Not charging: publish if the percentage changed.
             BatteryStatus::Available { charge_state, level } => {
-                let battery_percent = self.get_battery_percent(val);
                 if level != Some(battery_percent) {
                     self.commit(BatteryStatus::Available {
                         charge_state,
@@ -203,7 +255,6 @@ impl BatteryProcessor {
             }
             // First ADC reading: transition from Unavailable.
             BatteryStatus::Unavailable => {
-                let battery_percent = self.get_battery_percent(val);
                 self.commit(BatteryStatus::Available {
                     charge_state: ChargeState::Unknown,
                     level: Some(battery_percent),
