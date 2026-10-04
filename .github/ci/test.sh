@@ -19,11 +19,12 @@ cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features host
 cargo +stable "${nx[@]}" --manifest-path rmk-types/Cargo.toml --features steno
 cargo +stable "${nx[@]}" --manifest-path rmk-macro/Cargo.toml --features _simulator
+# Include a battery peripheral so split BLE assertions always run.
 for feats in "${RMK_TEST_FEATURESETS[@]}"; do
     if [[ -z "$feats" ]]; then
-        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features
+        KEYBOARD_TOML_PATH="$repo_root/rmk/tests/ble_battery.toml" cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features
     else
-        cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
+        KEYBOARD_TOML_PATH="$repo_root/rmk/tests/ble_battery.toml" cargo +stable "${nx[@]}" --manifest-path rmk/Cargo.toml --no-default-features --features "$feats"
     fi
 done
 

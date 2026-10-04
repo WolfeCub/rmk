@@ -1,0 +1,21 @@
+# Runtime test capacities and one peripheral Battery Level characteristic.
+[rmk]
+auto_mouse_layer_max_num = 2
+
+[split]
+connection = "ble"
+
+[split.central]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 0
+matrix = {}
+
+[[split.peripheral]]
+rows = 1
+cols = 1
+row_offset = 0
+col_offset = 1
+matrix = {}
+battery_adc_pin = "P0_05"
