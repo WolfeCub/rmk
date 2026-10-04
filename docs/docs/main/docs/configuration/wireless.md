@@ -167,6 +167,12 @@ rmk_config.ble_battery_config = BleBatteryConfig { enabled: true };
 
 Use `BleBatteryConfig::disabled()` to disable central notifications. This option does not configure GPIOs or start battery components. For changes to an existing Rust project, see [battery setup migration](../migration/v09_v10#battery-setup).
 
+## Read BLE battery percentages
+
+Each board retains its last measured percentage until the central restarts. Direct reads of its Battery Level characteristic use that measurement when the current percentage is unknown. Before the first measurement, direct reads return an ATT error; a measured `0%` remains valid. Battery Level reads require an encrypted connection.
+
+Read Blob follows the same rule. Other BLE read procedures retain the BLE stack's default behavior, so a host may show `0%` before the first measurement depending on how it queries the service. Read Multiple remains unsupported and does not change battery attributes.
+
 ## Name batteries reported to the host
 
 BLE split keyboards expose one Battery Service for the central and one for each peripheral with `battery_adc_pin`. Configure the display names in `battery_user_description`:

@@ -1,5 +1,6 @@
 #[cfg(all(feature = "dongle", feature = "custom_message"))]
 use postcard::experimental::max_size::MaxSize;
+use trouble_host::att::{AttClient, AttReq, AttRsp};
 use trouble_host::prelude::*;
 use usbd_hid::descriptor::{AsInputReport, SerializedDescriptor};
 
@@ -44,6 +45,100 @@ pub(crate) struct Server {
     #[cfg(feature = "dongle")]
     pub(crate) dongle_event_service: DongleEventService,
 }
+
+const ATT_READ_REQ: u8 = 0x0a;
+const ATT_READ_BLOB_REQ: u8 = 0x0c;
+// trouble-host decodes the variable-length Read Multiple opcode into AttReq::ReadMultiple.
+const ATT_READ_MULTIPLE_VARIABLE_REQ: u8 = 0x20;
+
+impl Server<'_> {
+    /// Prepares direct battery reads and validates unsupported batch reads.
+    pub(crate) fn handle_read(
+        &self,
+        conn: &Connection<'_, DefaultPacketPool>,
+        request: &AttClient<'_>,
+    ) -> Option<AttRsp<'static>> {
+        let reject = |request, handle, code| Some(AttRsp::Error { request, handle, code });
+        match request {
+            AttClient::Request(AttReq::Read { handle } | AttReq::ReadBlob { handle, .. }) => {
+                if let Err(code) = self.prepare_battery_read(conn, *handle) {
+                    let opcode = if matches!(request, AttClient::Request(AttReq::Read { .. })) {
+                        ATT_READ_REQ
+                    } else {
+                        ATT_READ_BLOB_REQ
+                    };
+                    return reject(opcode, *handle, code);
+                }
+            }
+            AttClient::Request(AttReq::ReadMultiple { handles }) => {
+                if handles.len() < 4 || !handles.len().is_multiple_of(2) {
+                    return reject(ATT_READ_MULTIPLE_VARIABLE_REQ, 0, AttErrorCode::INVALID_PDU);
+                }
+                for handle in handles.as_chunks::<2>().0 {
+                    let handle = u16::from_le_bytes(*handle);
+                    if handle == 0 || usize::from(handle) > self.table().len() {
+                        return reject(ATT_READ_MULTIPLE_VARIABLE_REQ, handle, AttErrorCode::INVALID_HANDLE);
+                    }
+                    let result = match self.battery_read_value(conn, handle) {
+                        Ok(Some(_)) => Ok(()),
+                        Ok(None) => self.read(conn, handle, 0, &mut [0]).map(|_| ()),
+                        Err(code) => Err(code),
+                    };
+                    if let Err(code) = result {
+                        return reject(ATT_READ_MULTIPLE_VARIABLE_REQ, handle, code);
+                    }
+                }
+                return reject(ATT_READ_MULTIPLE_VARIABLE_REQ, 0, AttErrorCode::REQUEST_NOT_SUPPORTED);
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn prepare_battery_read(&self, conn: &Connection<'_, DefaultPacketPool>, handle: u16) -> Result<(), AttErrorCode> {
+        if let Some((attribute, level)) = self.battery_read_value(conn, handle)? {
+            self.set(&attribute, &level).map_err(|_| AttErrorCode::UNLIKELY_ERROR)?;
+        }
+        Ok(())
+    }
+
+    fn battery_read_value(
+        &self,
+        conn: &Connection<'_, DefaultPacketPool>,
+        handle: u16,
+    ) -> Result<Option<(Characteristic<u8>, u8)>, AttErrorCode> {
+        let (attribute, measured) = if handle == self.battery_service.level.handle {
+            (
+                self.battery_service.level,
+                crate::input_device::battery::last_battery_level(),
+            )
+        } else {
+            #[cfg(feature = "split")]
+            {
+                let Some(slot) = self
+                    .peripheral_battery_services
+                    .levels
+                    .iter()
+                    .position(|level| level.handle == handle)
+                else {
+                    return Ok(None);
+                };
+                (
+                    self.peripheral_battery_services.levels[slot],
+                    crate::split::driver::last_peripheral_battery_level(crate::SPLIT_BATTERY_PERIPHERAL_IDS[slot]),
+                )
+            }
+            #[cfg(not(feature = "split"))]
+            return Ok(None);
+        };
+        self.read(conn, handle, 0, &mut [0])?;
+        let level = measured.ok_or(AttErrorCode::UNLIKELY_ERROR)?;
+        Ok(Some((attribute, level)))
+    }
+}
+
+#[cfg(test)]
+mod tests;
 
 /// One postcard-encoded [`crate::dongle::event::DongleEvent`] per notification.
 #[cfg(feature = "dongle")]

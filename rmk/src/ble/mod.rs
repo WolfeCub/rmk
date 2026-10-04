@@ -510,23 +510,7 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                 let mut cccd_updated = false;
                 let result = match &gatt_event {
                     GattEvent::Read(event) => {
-                        if event.handle() == level.handle {
-                            let value = server.get(&level);
-                            debug!("Read GATT Event to Level: {:?}", value);
-                        } else {
-                            #[cfg(feature = "split")]
-                            let peripheral_level =
-                                peripheral_levels.iter().find(|level| event.handle() == level.handle);
-                            #[cfg(not(feature = "split"))]
-                            let peripheral_level: Option<&Characteristic<u8>> = None;
-                            if let Some(peripheral_level) = peripheral_level {
-                                let value = server.get(peripheral_level);
-                                debug!("Read GATT Event to Peripheral Level: {:?}", value);
-                            } else {
-                                debug!("Read GATT Event to Unknown: {:?}", event.handle());
-                            }
-                        }
-
+                        debug!("Read GATT Event: {:?}", event.handle());
                         if conn.raw().security_level()?.encrypted() {
                             None
                         } else {
@@ -635,16 +619,23 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                     GattEvent::NotAllowed(_) => None,
                 };
 
-                // This step is also performed at drop(), but writing it explicitly is necessary
-                // in order to ensure reply is sent.
-                let result = if let Some(code) = result {
-                    gatt_event.reject(code)
+                let response = if result.is_none() && matches!(&gatt_event, GattEvent::Read(_) | GattEvent::Other(_)) {
+                    server.handle_read(conn.raw(), &gatt_event.payload().incoming())
                 } else {
-                    gatt_event.accept()
+                    None
                 };
-                match result {
-                    Ok(reply) => reply.send().await,
-                    Err(e) => warn!("[gatt] error sending response: {:?}", e),
+                if let Some(response) = response {
+                    gatt_event.into_payload().reply(response).await?;
+                } else {
+                    let reply = if let Some(code) = result {
+                        gatt_event.reject(code)
+                    } else {
+                        gatt_event.accept()
+                    };
+                    match reply {
+                        Ok(reply) => reply.send().await,
+                        Err(e) => warn!("[gatt] error sending response: {:?}", e),
+                    }
                 }
 
                 // Update CCCD table after processing the event

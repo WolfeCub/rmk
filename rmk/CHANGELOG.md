@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Retain each board's last measured BLE battery percentage across reconnects and keep direct central/peripheral battery reads independent.
+
 - **BREAKING**: Configure charging GPIOs through `ChargingStateReader` and `BatteryLedProcessor` instead of `BleBatteryConfig`. See [battery setup migration](https://rmk.rs/docs/migration/v09_v10#battery-setup).
 
 - **BREAKING**: Use bare `#[register_processor]` to run the type's `Runnable`. See [processor migration](https://rmk.rs/docs/migration/v09_v10#processors).
