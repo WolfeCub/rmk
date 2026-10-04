@@ -133,6 +133,63 @@ impl BatteryProcessor {
             ((val * total / measured - 4055) / 7) as u8
         })
     }
+
+    async fn on_battery_adc_event(&mut self, event: BatteryAdcEvent) {
+        let val = event.0;
+        trace!("Detected battery ADC value: {:?}", val);
+
+        let Some(battery_percent) = self.get_battery_percent(val) else {
+            return;
+        };
+        match self.battery_status {
+            // Skip ADC updates while charging
+            BatteryStatus::Available {
+                charge_state: ChargeState::Charging,
+                ..
+            } => {}
+            // Not charging: publish if the percentage changed.
+            BatteryStatus::Available { charge_state, level } => {
+                if level != Some(battery_percent) {
+                    self.commit(BatteryStatus::Available {
+                        charge_state,
+                        level: Some(battery_percent),
+                    });
+                }
+            }
+            // First ADC reading: transition from Unavailable.
+            BatteryStatus::Unavailable => {
+                self.commit(BatteryStatus::Available {
+                    charge_state: ChargeState::Unknown,
+                    level: Some(battery_percent),
+                });
+            }
+        }
+    }
+
+    async fn on_charging_state_event(&mut self, event: ChargingStateEvent) {
+        let charging = event.charging;
+        info!("Charging state changed: {:?}", charging);
+
+        let status = if charging {
+            // Keep current level when charging
+            let level = match self.battery_status {
+                BatteryStatus::Available { level, .. } => level,
+                BatteryStatus::Unavailable => None,
+            };
+            BatteryStatus::Available {
+                charge_state: ChargeState::Charging,
+                level,
+            }
+        } else {
+            // When unplugged, mark the level unknown and mark status as discharging
+            BatteryStatus::Available {
+                charge_state: ChargeState::Discharging,
+                level: None,
+            }
+        };
+
+        self.commit(status);
+    }
 }
 
 #[cfg(test)]
@@ -215,64 +272,5 @@ mod tests {
             input.done();
             output.done();
         });
-    }
-}
-
-impl BatteryProcessor {
-    async fn on_battery_adc_event(&mut self, event: BatteryAdcEvent) {
-        let val = event.0;
-        trace!("Detected battery ADC value: {:?}", val);
-
-        let Some(battery_percent) = self.get_battery_percent(val) else {
-            return;
-        };
-        match self.battery_status {
-            // Skip ADC updates while charging
-            BatteryStatus::Available {
-                charge_state: ChargeState::Charging,
-                ..
-            } => {}
-            // Not charging: publish if the percentage changed.
-            BatteryStatus::Available { charge_state, level } => {
-                if level != Some(battery_percent) {
-                    self.commit(BatteryStatus::Available {
-                        charge_state,
-                        level: Some(battery_percent),
-                    });
-                }
-            }
-            // First ADC reading: transition from Unavailable.
-            BatteryStatus::Unavailable => {
-                self.commit(BatteryStatus::Available {
-                    charge_state: ChargeState::Unknown,
-                    level: Some(battery_percent),
-                });
-            }
-        }
-    }
-
-    async fn on_charging_state_event(&mut self, event: ChargingStateEvent) {
-        let charging = event.charging;
-        info!("Charging state changed: {:?}", charging);
-
-        let status = if charging {
-            // Keep current level when charging
-            let level = match self.battery_status {
-                BatteryStatus::Available { level, .. } => level,
-                BatteryStatus::Unavailable => None,
-            };
-            BatteryStatus::Available {
-                charge_state: ChargeState::Charging,
-                level,
-            }
-        } else {
-            // When unplugged, mark the level unknown and mark status as discharging
-            BatteryStatus::Available {
-                charge_state: ChargeState::Discharging,
-                level: None,
-            }
-        };
-
-        self.commit(status);
     }
 }
