@@ -28,7 +28,8 @@ write a case that fails for the right reason.
 
 Dev loop — one feature set, from `rmk/` (requires `cargo nextest`):
 ```bash
-cargo nextest run --no-default-features --features=split,vial,storage,async_matrix,_ble
+KEYBOARD_TOML_PATH="$PWD/tests/ble_battery.toml" \
+  cargo nextest run --no-default-features --features=split,vial,storage,async_matrix,_ble
 ```
 
 Run macro tests from `rmk-macro/` (requires `cargo expand`).
