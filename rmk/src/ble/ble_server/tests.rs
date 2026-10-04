@@ -196,6 +196,8 @@ fn battery_reads_keep_encryption_permissions() {
     with_connection(false, |server, reply| {
         let [lo, hi] = server.battery_service.level.handle.to_le_bytes();
         assert_eq!(reply(&[0x0a, lo, hi]), [1, 0x0a, lo, hi, 5]);
+        let [dl, dh] = server.device_config_service.manufacturer_name.handle.to_le_bytes();
+        assert_eq!(reply(&[0x20, dl, dh, lo, hi]), [1, 0x20, 0, 0, 5]);
         #[cfg(feature = "split")]
         {
             let [lo, hi] = server

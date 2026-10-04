@@ -52,16 +52,19 @@ const ATT_READ_BLOB_REQ: u8 = 0x0c;
 const ATT_READ_MULTIPLE_VARIABLE_REQ: u8 = 0x20;
 
 impl Server<'_> {
-    /// Prepares direct battery reads and validates unsupported batch reads.
-    pub(crate) fn handle_read(
-        &self,
-        conn: &Connection<'_, DefaultPacketPool>,
-        request: &AttClient<'_>,
-    ) -> Option<AttRsp<'static>> {
+    /// Handles battery reads after trouble-host validates handles and permissions.
+    pub(crate) fn handle_read(&self, request: &AttClient<'_>) -> Option<AttRsp<'static>> {
         let reject = |request, handle, code| Some(AttRsp::Error { request, handle, code });
         match request {
             AttClient::Request(AttReq::Read { handle } | AttReq::ReadBlob { handle, .. }) => {
-                if let Err(code) = self.prepare_battery_read(conn, *handle) {
+                let result = match self.battery_read_value(*handle) {
+                    Ok(Some((attribute, level))) => {
+                        self.set(&attribute, &level).map_err(|_| AttErrorCode::UNLIKELY_ERROR)
+                    }
+                    Ok(None) => Ok(()),
+                    Err(code) => Err(code),
+                };
+                if let Err(code) = result {
                     let opcode = if matches!(request, AttClient::Request(AttReq::Read { .. })) {
                         ATT_READ_REQ
                     } else {
@@ -76,15 +79,7 @@ impl Server<'_> {
                 }
                 for handle in handles.as_chunks::<2>().0 {
                     let handle = u16::from_le_bytes(*handle);
-                    if handle == 0 || usize::from(handle) > self.table().len() {
-                        return reject(ATT_READ_MULTIPLE_VARIABLE_REQ, handle, AttErrorCode::INVALID_HANDLE);
-                    }
-                    let result = match self.battery_read_value(conn, handle) {
-                        Ok(Some(_)) => Ok(()),
-                        Ok(None) => self.read(conn, handle, 0, &mut [0]).map(|_| ()),
-                        Err(code) => Err(code),
-                    };
-                    if let Err(code) = result {
+                    if let Err(code) = self.battery_read_value(handle) {
                         return reject(ATT_READ_MULTIPLE_VARIABLE_REQ, handle, code);
                     }
                 }
@@ -95,18 +90,7 @@ impl Server<'_> {
         None
     }
 
-    fn prepare_battery_read(&self, conn: &Connection<'_, DefaultPacketPool>, handle: u16) -> Result<(), AttErrorCode> {
-        if let Some((attribute, level)) = self.battery_read_value(conn, handle)? {
-            self.set(&attribute, &level).map_err(|_| AttErrorCode::UNLIKELY_ERROR)?;
-        }
-        Ok(())
-    }
-
-    fn battery_read_value(
-        &self,
-        conn: &Connection<'_, DefaultPacketPool>,
-        handle: u16,
-    ) -> Result<Option<(Characteristic<u8>, u8)>, AttErrorCode> {
+    fn battery_read_value(&self, handle: u16) -> Result<Option<(Characteristic<u8>, u8)>, AttErrorCode> {
         let (attribute, measured) = if handle == self.battery_service.level.handle {
             (
                 self.battery_service.level,
@@ -131,7 +115,6 @@ impl Server<'_> {
             #[cfg(not(feature = "split"))]
             return Ok(None);
         };
-        self.read(conn, handle, 0, &mut [0])?;
         let level = measured.ok_or(AttErrorCode::UNLIKELY_ERROR)?;
         Ok(Some((attribute, level)))
     }

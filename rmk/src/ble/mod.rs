@@ -620,7 +620,7 @@ async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, Def
                 };
 
                 let response = if result.is_none() && matches!(&gatt_event, GattEvent::Read(_) | GattEvent::Other(_)) {
-                    server.handle_read(conn.raw(), &gatt_event.payload().incoming())
+                    server.handle_read(&gatt_event.payload().incoming())
                 } else {
                     None
                 };
