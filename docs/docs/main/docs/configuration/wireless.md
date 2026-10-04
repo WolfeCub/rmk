@@ -93,6 +93,20 @@ charge_led = { pin = "P0_21", low_active = false }
 
 The LED lights while charging. This setup has no measured battery percentage or low-battery blinking. Configure an ADC input if you need to report a percentage to the host.
 
+### Read battery status on the OLED
+
+The default OLED battery label distinguishes the charging state from the measured percentage:
+
+| Battery state                    | Label  |
+| -------------------------------- | ------ |
+| Measured at 42%, charging        | `42%+` |
+| Measured at 42%, not charging    | `42%`  |
+| Percentage unknown, charging     | `CHG`  |
+| Percentage unknown, not charging | `?`    |
+| No battery status available      | `N/A`  |
+
+Unknown percentages have no filled battery bars. A percentage can be unknown before the first ADC sample, or after charging ends while the keyboard waits for its next sample. A charging-only setup keeps the percentage unknown.
+
 ## Split battery configuration
 
 Configure each board's battery hardware in its existing split section:
@@ -141,7 +155,7 @@ let mut led = BatteryLedProcessor::new(led_pin, false);
 run_all!(charging, battery, led, keyboard, ble_transport).await;
 ```
 
-For percentage measurement, replace `charging_only()` with `BatteryProcessor::new(measured, total)` and run your ADC input alongside it. The nRF ADC task must publish `BatteryAdcEvent`; the [nRF52840 Rust example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/src/main.rs) shows its initialization. Run one `BatteryProcessor` per board, whether you have ADC input, charging input, or both.
+For percentage measurement, replace `charging_only()` with `BatteryProcessor::new(measured, total)` and run your ADC input alongside it. Use `BatteryProcessor::new(1, 5)` for an internal VDDH input. The processor uses the divider you supply. The nRF ADC task must publish `BatteryAdcEvent`; the [nRF52840 Rust example](https://github.com/rmk-rs/rmk/blob/main/examples/use_rust/nrf52840_ble/src/main.rs) shows its initialization. Run one `BatteryProcessor` per board, whether you have ADC input, charging input, or both.
 
 `BleBatteryConfig` controls central battery notifications. Before constructing `BleTransport`, set it on your existing `rmk_config` instance:
 

@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Honor the configured battery ADC divider, preserve sampled percentages on the first charger read, and display unknown OLED battery levels as empty bars with `?` or `CHG`.
+
 - Re-pairing a cleared BLE profile with the same host no longer leaves the profile marked as removed.
 - Apply processor registration conditions to both construction and execution.
 - Reject zero processor polling intervals at compile time.
