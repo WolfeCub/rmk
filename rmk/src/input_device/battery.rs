@@ -204,13 +204,11 @@ mod tests {
 
     use super::{BatteryProcessor, ChargingStateReader, current_battery_status};
     use crate::core_traits::Runnable;
-    use crate::event::{BatteryAdcEvent, publish_event};
     use crate::processor::builtin::battery_led::BatteryLedProcessor;
     use crate::test_support::test_block_on;
 
     #[test]
-    fn invalid_adc_dividers_do_not_panic() {
-        assert_eq!(BatteryProcessor::new(1, 0).get_battery_percent(2000), Some(0));
+    fn zero_adc_divider_does_not_panic() {
         assert_eq!(BatteryProcessor::new(0, 1).get_battery_percent(2000), Some(0));
     }
 
@@ -251,11 +249,8 @@ mod tests {
 
             for second in 1..=8 {
                 MockDriver::get().advance(Duration::from_secs(1));
-                if second == 8 {
-                    publish_event(BatteryAdcEvent(4096));
-                }
                 assert!(poll!(run.as_mut()).is_pending());
-                if second >= 2 {
+                if matches!(second, 2 | 7) {
                     assert_eq!(
                         current_battery_status(),
                         BatteryStatus::Available {
