@@ -833,7 +833,12 @@ impl<'a> Keyboard<'a> {
         event_time: Instant,
     ) {
         // Start forks
-        let key_action = self.try_start_forks(original_key_action, event);
+        let (key_action, dropped_modifiers) = self.try_start_forks(original_key_action, event);
+
+        // Send the modifier release in its own report. macOS may apply the key first if both share a report.
+        if dropped_modifiers {
+            self.send_keyboard_report_with_resolved_modifiers(true).await;
+        }
 
         // Clear with_modifier if a new key is pressed
         if self.with_modifiers.into_bits() != 0 && event.pressed {
@@ -856,15 +861,19 @@ impl<'a> Keyboard<'a> {
         } else {
             self.process_key_action_morse(&key_action, event, event_time).await;
         }
-        self.try_finish_forks(original_key_action, event);
+        // Restore the modifiers the fork suppressed
+        if self.try_finish_forks(original_key_action, event) {
+            self.send_keyboard_report_with_resolved_modifiers(false).await;
+        }
     }
 
     /// Replaces the incoming key_action if a fork is configured for that key.
     /// The replacement decision is made at key_press time, and the decision
     /// is kept until the key is released.
-    fn try_start_forks(&mut self, key_action: &KeyAction, event: KeyboardEvent) -> KeyAction {
+    /// Also returns whether the fork suppresses held modifiers.
+    fn try_start_forks(&mut self, key_action: &KeyAction, event: KeyboardEvent) -> (KeyAction, bool) {
         if self.keymap.forks_is_empty() {
-            return *key_action;
+            return (*key_action, false);
         }
 
         if !event.pressed {
@@ -882,7 +891,7 @@ impl<'a> Keyboard<'a> {
                 }
                 None
             });
-            return result.unwrap_or(*key_action);
+            return (result.unwrap_or(*key_action), false);
         }
 
         let mut decision_state = StateBits {
@@ -968,13 +977,23 @@ impl<'a> Keyboard<'a> {
             });
         }
 
+        // Modifiers the replacement adds back are not dropped
+        let readded = match replacement {
+            KeyAction::Single(Action::KeyWithModifier(_, modifiers)) => modifiers,
+            _ => ModifierCombination::default(),
+        };
+        let held = self.resolve_explicit_modifiers(event.pressed);
+        let dropped = held & combined_suppress & !self.fork_keep_mask & !readded;
+
         // No (or no more) forks were triggered, so we are done
-        replacement
+        (replacement, dropped.into_bits() != 0)
     }
 
     // Release of forked key must deactivate the fork
     // (explicit modifier suppressing effect will be stopped only AFTER the release hid report is sent)
-    fn try_finish_forks(&mut self, original_key_action: &KeyAction, event: KeyboardEvent) {
+    // Returns whether the resolved modifiers changed
+    fn try_finish_forks(&mut self, original_key_action: &KeyAction, event: KeyboardEvent) -> bool {
+        let modifiers_before = self.resolve_modifiers(false);
         if !event.pressed {
             let fork_states = &mut self.fork_states;
             self.keymap.with_forks(|forks| {
@@ -986,6 +1005,7 @@ impl<'a> Keyboard<'a> {
                 }
             });
         }
+        self.resolve_modifiers(false) != modifiers_before
     }
 
     /// Trigger a combo that is delayed(if exists).

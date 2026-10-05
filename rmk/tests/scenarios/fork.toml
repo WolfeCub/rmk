@@ -1,0 +1,55 @@
+# A fork that suppresses a held modifier sends the release in its own report
+# before the replacement key, and restores the modifier after the key is released.
+
+[layout]
+rows = 1
+cols = 4
+map = """
+(0,0)  (0,1)  (0,2)  (0,3)
+"""
+
+[[keymap.layer]]
+keys = """
+LM(1, LShift)  LCtrl  Equal  Delete
+"""
+
+[[keymap.layer]]
+keys = """
+_  _  Kp9  _
+"""
+
+[behavior.fork]
+forks = [
+  { trigger = "Kp9", positive_output = "Kc9", negative_output = "SHIFTED(Kc9)", match_any = "LShift", match_none = "LCtrl" },
+]
+
+[[test]]
+name = "suppressed_modifier_released_first"
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { release = [0, 0] },
+]
+expect = [["LShift"], [], ["Kc9"], [], ["LShift"], [], ["Kc9"], [], ["LShift"], []]
+
+[[test]]
+name = "negative_branch_keeps_modifier"
+steps = [
+  { press = [0, 1] },
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { release = [0, 0] },
+  { release = [0, 1] },
+]
+expect = [["LCtrl"], ["LCtrl", "LShift"], ["LCtrl", "LShift", "Kc9"], ["LCtrl"], ["LCtrl", "LShift"], ["LCtrl"], []]
+
+[[test]]
+name = "modifier_restored_before_next_key"
+steps = [
+  { press = [0, 0] },
+  { tap = { pos = [0, 2], duration = 30 } },
+  { tap = { pos = [0, 3], duration = 30 } },
+  { release = [0, 0] },
+]
+expect = [["LShift"], [], ["Kc9"], [], ["LShift"], ["LShift", "Delete"], ["LShift"], []]
